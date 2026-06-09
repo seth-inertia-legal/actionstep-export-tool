@@ -54,6 +54,9 @@ public sealed class ActionstepApiClient : IDisposable
 
         while (page <= totalPages)
         {
+            if (page > 1)
+                Console.WriteLine($"  → Fetching page {page}/{(totalPages == int.MaxValue ? "?" : totalPages.ToString())} ...");
+
             string url =
                 $"rest/actiondocuments" +
                 $"?modifiedTimestamp_gteq={Uri.EscapeDataString(sinceParam)}" +

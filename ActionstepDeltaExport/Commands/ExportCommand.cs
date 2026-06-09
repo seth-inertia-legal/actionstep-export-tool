@@ -82,6 +82,7 @@ public static class ExportCommand
         long totalBytes   = 0;
         int skipped    = 0;
         int deleted    = 0;
+        int processed  = 0;      // Total docs seen (for periodic progress log).
 
         // Lazy per-action folder cache: populated on first document seen per action.
         // Key = action_id string; Value = folderId → full path dictionary.
@@ -89,6 +90,8 @@ public static class ExportCommand
 
         await foreach (var doc in apiClient.GetDocumentsSinceAsync(sinceDate, ct))
         {
+            processed++;
+
             // a) Handle soft-deleted documents: update manifest only, no file.
             if (doc.IsDeleted)
             {
@@ -118,10 +121,15 @@ public static class ExportCommand
             if (dryRun)
             {
                 // d-dry) Record intent without transferring.
-                Console.WriteLine($"  [DRY RUN] {actionId}/{safeFile} ({doc.FileSize ?? 0:N0} bytes)");
                 wouldDownload++;
                 totalBytes += doc.FileSize ?? 0;
                 UpsertRecord(manifestIndex, doc, outputPath, folderPath);
+
+                // Log progress every 100 documents so the console shows activity.
+                if (wouldDownload % 100 == 0)
+                    Console.WriteLine(
+                        $"  [DRY RUN] {wouldDownload:N0} docs processed " +
+                        $"({folderCache.Count} action(s) resolved) ...");
             }
             else
             {
@@ -152,11 +160,15 @@ public static class ExportCommand
             }
         }
 
+        Console.WriteLine($"  Streaming complete: {processed:N0} total doc(s) seen.");
+
         // ── 5. Write merged manifest ──────────────────────────────────────────
 
-        string manifestBase = Path.GetFileNameWithoutExtension(manifestPath);
-        string suffix       = dryRun ? $"_dryrun_{runTimestamp}" : $"_{runTimestamp}";
-        string newManifest  = Path.Combine(outputRoot, $"{manifestBase}{suffix}.csv");
+        string manifestBase = string.IsNullOrWhiteSpace(manifestPath)
+            ? "manifest"
+            : Path.GetFileNameWithoutExtension(manifestPath);
+        string suffix      = dryRun ? $"_dryrun_{runTimestamp}" : $"_{runTimestamp}";
+        string newManifest = Path.Combine(outputRoot, $"{manifestBase}{suffix}.csv");
 
         var allRecords = manifestIndex.Values.OrderBy(r => r.ActionId).ThenBy(r => r.LogId);
         ManifestService.Write(newManifest, allRecords);

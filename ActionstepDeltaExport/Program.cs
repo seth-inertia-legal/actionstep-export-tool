@@ -73,8 +73,18 @@ exportCommand.SetHandler(async (string? since, string? manifest, string? output,
             $"SinceDate derived from manifest: {maxDate.Value:yyyy-MM-dd HH:mm:ss} UTC");
     }
 
-    int exitCode = await ExportCommand.RunAsync(settings, dryRun);
-    Environment.Exit(exitCode);
+    try
+    {
+        int exitCode = await ExportCommand.RunAsync(settings, dryRun);
+        Environment.Exit(exitCode);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine();
+        Console.Error.WriteLine($"Fatal error: {ex.Message}");
+        Console.Error.WriteLine(ex.StackTrace);
+        Environment.Exit(99);
+    }
 },
 sinceOpt, manifestOpt, outputRootOpt, dryRunOpt);
 
