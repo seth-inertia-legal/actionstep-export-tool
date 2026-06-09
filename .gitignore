@@ -11,6 +11,9 @@ appsettings.Local.json
 *.docx
 *.xlsx
 
+# Client-specific files
+actionstep_backup_links.html
+
 # OS
 .DS_Store
 Thumbs.db
