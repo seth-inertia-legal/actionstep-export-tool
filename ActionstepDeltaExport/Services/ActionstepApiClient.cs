@@ -188,7 +188,16 @@ public sealed class ActionstepApiClient : IDisposable
                 return folders;
             }
 
-            var result = JsonSerializer.Deserialize<ActionFolderListResponse>(body, JsonOpts);
+            ActionFolderListResponse? result;
+            try
+            {
+                result = JsonSerializer.Deserialize<ActionFolderListResponse>(body, JsonOpts);
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"  [WARN] Could not parse folder response for action {actionId}: {ex.Message}");
+                return folders;
+            }
 
             if (result is null || result.Folders.Count == 0)
                 break;
