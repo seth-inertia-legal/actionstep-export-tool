@@ -4,12 +4,20 @@ using ActionstepDeltaExport.Services;
 namespace ActionstepDeltaExport.Commands;
 
 /// <summary>
-/// Runs a single API call to GET /api/rest/actiondocuments?pageSize=1 and
-/// pretty-prints the raw JSON response.  Use this before the first export to
-/// verify that JsonPropertyName values in ActionDocument.cs match the live API.
+/// Authenticates and pretty-prints one raw JSON record from each of the three
+/// main resource endpoints — actiondocuments, actions, and actionfolders.
+/// Use this to verify DTO field name mappings and discover sideloaded shapes
+/// (e.g. linked.actiontypes) before running a full export.
 /// </summary>
 public static class ProbeCommand
 {
+    private static readonly (string Url, string Label)[] Endpoints =
+    [
+        ("rest/actiondocuments?pageSize=1", "GET /api/rest/actiondocuments?pageSize=1"),
+        ("rest/actions?pageSize=1",         "GET /api/rest/actions?pageSize=1"),
+        ("rest/actionfolders?pageSize=1",   "GET /api/rest/actionfolders?pageSize=1"),
+    ];
+
     public static async Task<int> RunAsync(
         AppSettings settings,
         CancellationToken ct = default)
@@ -20,13 +28,21 @@ public static class ProbeCommand
 
         Console.WriteLine($"API endpoint: {token.ApiEndpoint}");
         Console.WriteLine();
-        Console.WriteLine("Probing GET /api/rest/actiondocuments?pageSize=1 ...");
-        Console.WriteLine();
 
         using var client = new ActionstepApiClient(token);
-        string json = await client.ProbeAsync(ct);
 
-        Console.WriteLine(json);
+        foreach (var (url, label) in Endpoints)
+        {
+            Console.WriteLine(new string('─', 72));
+            Console.WriteLine($"Probing {label} ...");
+            Console.WriteLine(new string('─', 72));
+            Console.WriteLine();
+
+            string json = await client.ProbeEndpointAsync(url, ct);
+            Console.WriteLine(json);
+            Console.WriteLine();
+        }
+
         return 0;
     }
 }

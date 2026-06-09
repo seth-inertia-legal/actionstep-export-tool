@@ -454,14 +454,14 @@ public sealed class ActionstepApiClient : IDisposable
     // ── Probe ─────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Fetches a single actiondocument record and returns the pretty-printed JSON.
-    /// Use this to verify <see cref="ActionDocument"/> field name mappings before
-    /// running a full export.
+    /// Fetches one record from <paramref name="relativeUrl"/> and returns the
+    /// pretty-printed JSON.  Use this to verify DTO field name mappings.
     /// </summary>
-    public async Task<string> ProbeAsync(CancellationToken ct = default)
+    public async Task<string> ProbeEndpointAsync(
+        string relativeUrl,
+        CancellationToken ct = default)
     {
-        string url      = "rest/actiondocuments?pageSize=1";
-        var    response = await _http.GetAsync(url, ct);
+        var    response = await _http.GetAsync(relativeUrl, ct);
         string body     = await response.Content.ReadAsStringAsync(ct);
 
         try

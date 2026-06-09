@@ -137,8 +137,10 @@ exportCommand.SetHandler(
 // ── probe command ─────────────────────────────────────────────────────────────
 
 var probeCommand = new Command("probe",
-    "Authenticate and print a raw JSON sample from GET /api/rest/actiondocuments?pageSize=1. " +
-    "Use this to verify field name mappings before the first export.");
+    "Authenticate and print one raw JSON record from each main endpoint " +
+    "(actiondocuments, actions, actionfolders). " +
+    "Use this to verify DTO field name mappings and inspect sideloaded shapes " +
+    "(e.g. linked.actiontypes) before the first export.");
 
 probeCommand.SetHandler(async () =>
 {
