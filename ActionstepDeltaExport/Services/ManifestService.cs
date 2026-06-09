@@ -11,6 +11,8 @@ namespace ActionstepDeltaExport.Services;
 public static class ManifestService
 {
     // Datetime formats present in the manifest.
+    // Covers plain timestamps, high-precision timestamps, and timezone-offset variants
+    // such as "2016-09-02 13:32:53+00" exported by Actionstep.
     private static readonly string[] DateFormats =
     {
         "yyyy-MM-dd HH:mm:ss.fffffff",
@@ -19,6 +21,10 @@ public static class ManifestService
         "yyyy-MM-dd HH:mm:ss.ffff",
         "yyyy-MM-dd HH:mm:ss.fff",
         "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd HH:mm:sszz",    // e.g. 2016-09-02 13:32:53+00
+        "yyyy-MM-dd HH:mm:sszzz",   // e.g. 2016-09-02 13:32:53+00:00
+        "yyyy-MM-dd HH:mm:ss.ffffffzz",
+        "yyyy-MM-dd HH:mm:ss.ffffffzzz",
         "yyyy-MM-dd"
     };
 
@@ -51,9 +57,15 @@ public static class ManifestService
         csv.Context.TypeConverterOptionsCache.GetOptions<DateTime?>().NullValues.AddRange(nullStr);
         csv.Context.TypeConverterOptionsCache.GetOptions<int?>().NullValues.AddRange(nullStr);
 
-        // Register all expected datetime formats.
-        csv.Context.TypeConverterOptionsCache.GetOptions<DateTime?>().Formats = DateFormats;
-        csv.Context.TypeConverterOptionsCache.GetOptions<DateTime>().Formats  = DateFormats;
+        // Register all expected datetime formats and adjust to UTC when a
+        // timezone offset is present (e.g. "2016-09-02 13:32:53+00").
+        var dtOpts = csv.Context.TypeConverterOptionsCache.GetOptions<DateTime?>();
+        dtOpts.Formats       = DateFormats;
+        dtOpts.DateTimeStyle = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
+
+        var dtOptsNonNull = csv.Context.TypeConverterOptionsCache.GetOptions<DateTime>();
+        dtOptsNonNull.Formats       = DateFormats;
+        dtOptsNonNull.DateTimeStyle = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
 
         return csv.GetRecords<ManifestRecord>().ToList();
     }
