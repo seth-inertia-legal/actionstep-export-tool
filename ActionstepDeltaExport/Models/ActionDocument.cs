@@ -119,6 +119,9 @@ public class PagingWrapper
 
     [JsonPropertyName("actionfolders")]
     public PagingInfo? ActionFolders { get; set; }
+
+    [JsonPropertyName("actions")]
+    public PagingInfo? Actions { get; set; }
 }
 
 public class PagingInfo
