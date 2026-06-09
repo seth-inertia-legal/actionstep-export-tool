@@ -95,11 +95,15 @@ public class ResponseMeta
 /// <summary>
 /// The paging object is keyed by resource name:
 /// { "paging": { "actiondocuments": { "recordCount": ..., "pageCount": ... } } }
+/// Each resource type has its own key; add new properties here as needed.
 /// </summary>
 public class PagingWrapper
 {
     [JsonPropertyName("actiondocuments")]
     public PagingInfo? ActionDocuments { get; set; }
+
+    [JsonPropertyName("actionfolders")]
+    public PagingInfo? ActionFolders { get; set; }
 }
 
 public class PagingInfo
