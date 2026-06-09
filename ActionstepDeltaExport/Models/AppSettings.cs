@@ -19,6 +19,14 @@ public class ActionstepSettings
     /// Set to 0 (default) to pick a random available port automatically.
     /// </summary>
     public int CallbackPort { get; set; } = 0;
+
+    /// <summary>
+    /// Optional override for the API endpoint returned by the token response.
+    /// Set this to force a specific regional endpoint, e.g.
+    /// "https://us-west-2.actionstep.com/api/"
+    /// Leave empty to use the endpoint returned by Actionstep automatically.
+    /// </summary>
+    public string ApiEndpointOverride { get; set; } = string.Empty;
 }
 
 public class ExportSettings

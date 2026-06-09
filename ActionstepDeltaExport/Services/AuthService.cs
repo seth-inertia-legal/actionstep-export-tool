@@ -46,6 +46,7 @@ public sealed class AuthService : IDisposable
             {
                 Console.WriteLine("Access token expiring — refreshing silently...");
                 var refreshed = await RefreshAsync(stored, ct);
+                ApplyEndpointOverride(refreshed);
                 SaveTokens(refreshed);
                 Console.WriteLine("Token refreshed.");
                 return refreshed;
@@ -81,9 +82,11 @@ public sealed class AuthService : IDisposable
 
         var tokens = await ExchangeCodeAsync(code, redirect, ct);
         tokens.RedirectUri = redirect;   // Persist for future refresh calls.
+        ApplyEndpointOverride(tokens);
         SaveTokens(tokens);
 
         Console.WriteLine($"Authenticated successfully.  Org key: {tokens.OrgKey}");
+        Console.WriteLine($"API endpoint: {tokens.ApiEndpoint}");
         return tokens;
     }
 
@@ -181,6 +184,20 @@ public sealed class AuthService : IDisposable
     {
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
         catch { /* User will copy the URL manually. */ }
+    }
+
+    /// <summary>
+    /// If <see cref="ActionstepSettings.ApiEndpointOverride"/> is set, replaces
+    /// the api_endpoint returned by the token response with the configured value.
+    /// </summary>
+    private void ApplyEndpointOverride(TokenData token)
+    {
+        if (!string.IsNullOrWhiteSpace(_cfg.ApiEndpointOverride))
+        {
+            Console.WriteLine(
+                $"ApiEndpointOverride applied: {token.ApiEndpoint} → {_cfg.ApiEndpointOverride}");
+            token.ApiEndpoint = _cfg.ApiEndpointOverride;
+        }
     }
 
     public void Dispose() => _http.Dispose();
