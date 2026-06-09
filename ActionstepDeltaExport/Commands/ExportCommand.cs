@@ -11,7 +11,9 @@ namespace ActionstepDeltaExport.Commands;
 ///   1. Authenticate (browser flow on first run, token cache thereafter).
 ///   2. Load the existing manifest to build a lookup index.
 ///   3. Stream actiondocuments modified since <c>SinceDate</c> from the API.
-///   4. For each document, download the file into OutputRoot/{action_id}/.
+///   4. For each document:
+///      - Live run : download the file into OutputRoot/{action_id}/
+///      - Dry run  : record what would be downloaded, skip file transfer
 ///   5. Upsert the record into the merged manifest.
 ///   6. Write a new dated manifest CSV next to the original.
 ///   7. Append any per-document errors to errors_{timestamp}.csv.
@@ -22,9 +24,16 @@ public static class ExportCommand
 
     public static async Task<int> RunAsync(
         AppSettings settings,
+        bool dryRun = false,
         CancellationToken ct = default)
     {
         string runTimestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+
+        if (dryRun)
+        {
+            Console.WriteLine("*** DRY RUN — no files will be downloaded ***");
+            Console.WriteLine();
+        }
 
         // ── 1. Resolve configuration ──────────────────────────────────────────
 
@@ -65,10 +74,12 @@ public static class ExportCommand
 
         using var apiClient = new ActionstepApiClient(token);
 
-        // ── 4. Stream and download documents ──────────────────────────────────
+        // ── 4. Stream and (optionally) download documents ─────────────────────
 
-        var errors = new List<ExportError>();
+        var errors    = new List<ExportError>();
         int downloaded = 0;
+        int wouldDownload = 0;
+        long totalBytes   = 0;
         int skipped    = 0;
         int deleted    = 0;
 
@@ -97,29 +108,40 @@ public static class ExportCommand
             string safeFile   = SanitizeFileName(doc.FileName!);
             string outputPath = Path.Combine(outputRoot, actionId, safeFile);
 
-            // d) Download with skip-and-continue error handling.
-            try
+            if (dryRun)
             {
-                Console.Write($"  Downloading doc {doc.Id} ({doc.FileSize:N0} bytes) " +
-                              $"→ {actionId}/{safeFile} ... ");
-
-                await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize, outputPath, ct);
-
-                Console.WriteLine("OK");
-                downloaded++;
+                // d-dry) Record intent without transferring.
+                Console.WriteLine($"  [DRY RUN] {actionId}/{safeFile} ({doc.FileSize:N0} bytes)");
+                wouldDownload++;
+                totalBytes += doc.FileSize;
                 UpsertRecord(manifestIndex, doc, outputPath);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            else
             {
-                Console.WriteLine($"FAILED: {ex.Message}");
-                errors.Add(new ExportError
+                // d-live) Download with skip-and-continue error handling.
+                try
                 {
-                    DocumentId  = doc.Id,
-                    ActionId    = actionId,
-                    FileName    = doc.FileName,
-                    ErrorMessage = ex.Message,
-                    Timestamp   = DateTime.UtcNow
-                });
+                    Console.Write($"  Downloading doc {doc.Id} ({doc.FileSize:N0} bytes) " +
+                                  $"→ {actionId}/{safeFile} ... ");
+
+                    await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize, outputPath, ct);
+
+                    Console.WriteLine("OK");
+                    downloaded++;
+                    UpsertRecord(manifestIndex, doc, outputPath);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Console.WriteLine($"FAILED: {ex.Message}");
+                    errors.Add(new ExportError
+                    {
+                        DocumentId   = doc.Id,
+                        ActionId     = actionId,
+                        FileName     = doc.FileName,
+                        ErrorMessage = ex.Message,
+                        Timestamp    = DateTime.UtcNow
+                    });
+                }
             }
         }
 
@@ -127,17 +149,17 @@ public static class ExportCommand
 
         string manifestDir  = Path.GetDirectoryName(manifestPath) ?? ".";
         string manifestBase = Path.GetFileNameWithoutExtension(manifestPath);
-        string newManifest  = Path.Combine(manifestDir,
-            $"{manifestBase}_{runTimestamp}.csv");
+        string suffix       = dryRun ? $"_dryrun_{runTimestamp}" : $"_{runTimestamp}";
+        string newManifest  = Path.Combine(manifestDir, $"{manifestBase}{suffix}.csv");
 
         var allRecords = manifestIndex.Values.OrderBy(r => r.ActionId).ThenBy(r => r.LogId);
         ManifestService.Write(newManifest, allRecords);
         Console.WriteLine();
         Console.WriteLine($"  Manifest written: {newManifest}");
 
-        // ── 6. Write errors CSV if any ────────────────────────────────────────
+        // ── 6. Write errors CSV if any (live run only) ────────────────────────
 
-        if (errors.Count > 0)
+        if (!dryRun && errors.Count > 0)
         {
             string errorCsv = Path.Combine(manifestDir, $"errors_{runTimestamp}.csv");
             WriteErrorsCsv(errorCsv, errors);
@@ -147,13 +169,24 @@ public static class ExportCommand
         // ── 7. Summary ────────────────────────────────────────────────────────
 
         Console.WriteLine();
-        Console.WriteLine($"Export complete:");
-        Console.WriteLine($"  Downloaded : {downloaded:N0}");
-        Console.WriteLine($"  Deleted    : {deleted:N0}  (manifest-only update)");
-        Console.WriteLine($"  Skipped    : {skipped:N0}  (placeholder/empty)");
-        Console.WriteLine($"  Errors     : {errors.Count:N0}");
+        if (dryRun)
+        {
+            Console.WriteLine($"Dry run complete:");
+            Console.WriteLine($"  Would download : {wouldDownload:N0} file(s) " +
+                               $"({totalBytes / 1024.0 / 1024.0:N1} MB total)");
+            Console.WriteLine($"  Deleted        : {deleted:N0}  (manifest-only)");
+            Console.WriteLine($"  Skipped        : {skipped:N0}  (placeholder/empty)");
+        }
+        else
+        {
+            Console.WriteLine($"Export complete:");
+            Console.WriteLine($"  Downloaded : {downloaded:N0}");
+            Console.WriteLine($"  Deleted    : {deleted:N0}  (manifest-only update)");
+            Console.WriteLine($"  Skipped    : {skipped:N0}  (placeholder/empty)");
+            Console.WriteLine($"  Errors     : {errors.Count:N0}");
+        }
 
-        return errors.Count > 0 ? 2 : 0;   // Exit 2 = partial success.
+        return errors.Count > 0 ? 2 : 0;   // Exit 2 = partial success (live run only).
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

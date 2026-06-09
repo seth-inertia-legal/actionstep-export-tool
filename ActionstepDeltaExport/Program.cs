@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration;
 using ActionstepDeltaExport.Commands;
 using ActionstepDeltaExport.Models;
 using ActionstepDeltaExport.Services;
-using ActionstepDeltaExport.Services;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -25,24 +24,26 @@ var rootCommand = new RootCommand("Actionstep delta document export tool.");
 var exportCommand = new Command("export",
     "Download documents created or modified since the configured SinceDate.");
 
-// Optional overrides for the three most common settings.
 var sinceOpt      = new Option<string?>("--since",
     "Override SinceDate from appsettings.json (e.g. 2026-05-23).");
 var manifestOpt   = new Option<string?>("--manifest",
     "Override ManifestPath from appsettings.json.");
 var outputRootOpt = new Option<string?>("--output",
     "Override OutputRoot from appsettings.json.");
+var dryRunOpt     = new Option<bool>("--dry-run",
+    "Page through the API and write a preview manifest without downloading any files.");
 
 exportCommand.AddOption(sinceOpt);
 exportCommand.AddOption(manifestOpt);
 exportCommand.AddOption(outputRootOpt);
+exportCommand.AddOption(dryRunOpt);
 
-exportCommand.SetHandler(async (string? since, string? manifest, string? output) =>
+exportCommand.SetHandler(async (string? since, string? manifest, string? output, bool dryRun) =>
 {
     // Apply any CLI overrides.
-    if (!string.IsNullOrWhiteSpace(since))   settings.Export.SinceDate    = since;
+    if (!string.IsNullOrWhiteSpace(since))    settings.Export.SinceDate    = since;
     if (!string.IsNullOrWhiteSpace(manifest)) settings.Export.ManifestPath = manifest;
-    if (!string.IsNullOrWhiteSpace(output))  settings.Export.OutputRoot   = output;
+    if (!string.IsNullOrWhiteSpace(output))   settings.Export.OutputRoot   = output;
 
     // If SinceDate is still empty, derive it from the manifest's max last_modified.
     if (string.IsNullOrWhiteSpace(settings.Export.SinceDate))
@@ -72,10 +73,10 @@ exportCommand.SetHandler(async (string? since, string? manifest, string? output)
             $"SinceDate derived from manifest: {maxDate.Value:yyyy-MM-dd HH:mm:ss} UTC");
     }
 
-    int exitCode = await ExportCommand.RunAsync(settings);
+    int exitCode = await ExportCommand.RunAsync(settings, dryRun);
     Environment.Exit(exitCode);
 },
-sinceOpt, manifestOpt, outputRootOpt);
+sinceOpt, manifestOpt, outputRootOpt, dryRunOpt);
 
 // ── probe command ─────────────────────────────────────────────────────────────
 
