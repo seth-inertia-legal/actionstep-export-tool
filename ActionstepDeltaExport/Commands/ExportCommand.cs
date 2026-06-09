@@ -147,10 +147,9 @@ public static class ExportCommand
 
         // ── 5. Write merged manifest ──────────────────────────────────────────
 
-        string manifestDir  = Path.GetDirectoryName(manifestPath) ?? ".";
         string manifestBase = Path.GetFileNameWithoutExtension(manifestPath);
         string suffix       = dryRun ? $"_dryrun_{runTimestamp}" : $"_{runTimestamp}";
-        string newManifest  = Path.Combine(manifestDir, $"{manifestBase}{suffix}.csv");
+        string newManifest  = Path.Combine(outputRoot, $"{manifestBase}{suffix}.csv");
 
         var allRecords = manifestIndex.Values.OrderBy(r => r.ActionId).ThenBy(r => r.LogId);
         ManifestService.Write(newManifest, allRecords);
@@ -161,7 +160,7 @@ public static class ExportCommand
 
         if (!dryRun && errors.Count > 0)
         {
-            string errorCsv = Path.Combine(manifestDir, $"errors_{runTimestamp}.csv");
+            string errorCsv = Path.Combine(outputRoot, $"errors_{runTimestamp}.csv");
             WriteErrorsCsv(errorCsv, errors);
             Console.WriteLine($"  Errors CSV      : {errorCsv}  ({errors.Count} error(s))");
         }
