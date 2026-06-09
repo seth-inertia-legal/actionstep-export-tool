@@ -41,9 +41,11 @@ public static class ManifestService
 
         var config = new CsvConfiguration(CultureInfo.InvariantCulture)
         {
-            HasHeaderRecord  = true,
-            MissingFieldFound = null,   // Tolerate rows with fewer columns.
+            HasHeaderRecord   = true,
+            MissingFieldFound = null,   // Tolerate rows with fewer columns than the model.
             BadDataFound      = null,   // Skip rows with unrecoverable parse errors.
+            HeaderValidated   = null,   // Allow mapped columns (e.g. folder_path) to be
+                                        // absent from older manifests — they'll read as null.
         };
 
         using var reader = new StreamReader(path);
