@@ -16,6 +16,7 @@ public static class ProbeCommand
         ("rest/actiondocuments?pageSize=1", "GET /api/rest/actiondocuments?pageSize=1"),
         ("rest/actions?pageSize=1",         "GET /api/rest/actions?pageSize=1"),
         ("rest/actionfolders?pageSize=1",   "GET /api/rest/actionfolders?pageSize=1"),
+        ("rest/actiontypes/6",              "GET /api/rest/actiontypes/6  (sample type ID)"),
     ];
 
     public static async Task<int> RunAsync(
