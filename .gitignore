@@ -1,0 +1,22 @@
+# .NET build output
+bin/
+obj/
+*.user
+
+# Runtime artifacts (never commit tokens or downloaded files)
+tokens.json
+*.csv
+*.pdf
+*.docx
+*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.sln.docstates
