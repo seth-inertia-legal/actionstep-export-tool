@@ -1,16 +1,11 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ActionstepDeltaExport.Models;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPORTANT: Run  `ActionstepDeltaExport.exe probe`  before the first export.
-// The probe prints the raw JSON from the actiondocuments endpoint so you can
-// verify that the [JsonPropertyName] values below match the actual API field
-// names.  If any names differ, update the attributes and rebuild.
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// <summary>
 /// A single record returned by GET /api/rest/actiondocuments.
+/// Field names verified against live API probe 2026-06-09.
 /// </summary>
 public class ActionDocument
 {
@@ -23,18 +18,18 @@ public class ActionDocument
     public string? Name { get; set; }
 
     /// <summary>
-    /// Stored file name on disk, e.g. "123_20230101_document.pdf".
-    /// Maps to manifest file_name.
-    /// Null for placeholder (empty) documents — these are skipped during download.
+    /// Stored file name on disk, e.g. "2_20160901_document.docx".
+    /// Null for placeholder documents — these are skipped during download.
     /// </summary>
     [JsonPropertyName("fileName")]
     public string? FileName { get; set; }
 
     /// <summary>
-    /// Internal download identifier, e.g. "DL::Actions::1570803::12537;".
-    /// Passed directly to GET /api/rest/files/{fileIdentifier}?part_number=N.
+    /// Internal download identifier, e.g. "DL::Actions::2::1".
+    /// Passed directly to GET /api/rest/files/{file}?part_number=N.
+    /// NOTE: The API field is "file", not "fileIdentifier".
     /// </summary>
-    [JsonPropertyName("fileIdentifier")]
+    [JsonPropertyName("file")]
     public string? FileIdentifier { get; set; }
 
     /// <summary>
@@ -45,6 +40,10 @@ public class ActionDocument
     [JsonPropertyName("fileSize")]
     public long FileSize { get; set; }
 
+    /// <summary>File extension including dot, e.g. ".docx".</summary>
+    [JsonPropertyName("extension")]
+    public string? Extension { get; set; }
+
     /// <summary>Last-modified UTC timestamp — used for delta comparison.</summary>
     [JsonPropertyName("modifiedTimestamp")]
     public DateTimeOffset? ModifiedTimestamp { get; set; }
@@ -53,8 +52,12 @@ public class ActionDocument
     [JsonPropertyName("createdTimestamp")]
     public DateTimeOffset? CreatedTimestamp { get; set; }
 
-    /// <summary>True if the document has been soft-deleted in Actionstep.</summary>
+    /// <summary>
+    /// True if the document has been soft-deleted in Actionstep.
+    /// The API returns "T" or "F" as a string, not a JSON boolean.
+    /// </summary>
     [JsonPropertyName("isDeleted")]
+    [JsonConverter(typeof(TFStringBoolConverter))]
     public bool IsDeleted { get; set; }
 
     [JsonPropertyName("links")]
@@ -86,20 +89,59 @@ public class ActionDocumentListResponse
 public class ResponseMeta
 {
     [JsonPropertyName("paging")]
-    public PagingInfo? Paging { get; set; }
+    public PagingWrapper? Paging { get; set; }
+}
+
+/// <summary>
+/// The paging object is keyed by resource name:
+/// { "paging": { "actiondocuments": { "recordCount": ..., "pageCount": ... } } }
+/// </summary>
+public class PagingWrapper
+{
+    [JsonPropertyName("actiondocuments")]
+    public PagingInfo? ActionDocuments { get; set; }
 }
 
 public class PagingInfo
 {
-    [JsonPropertyName("totalCount")]
+    /// <summary>Total number of matching records across all pages.</summary>
+    [JsonPropertyName("recordCount")]
     public int TotalCount { get; set; }
 
     [JsonPropertyName("pageCount")]
     public int PageCount { get; set; }
 
-    [JsonPropertyName("currentPage")]
+    /// <summary>Current page number (1-based).</summary>
+    [JsonPropertyName("page")]
     public int CurrentPage { get; set; }
 
     [JsonPropertyName("pageSize")]
     public int PageSize { get; set; }
+}
+
+// ── Converters ────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Handles Actionstep's non-standard boolean encoding:
+/// the API sends "T" or "F" as a JSON string instead of true/false.
+/// </summary>
+public sealed class TFStringBoolConverter : JsonConverter<bool>
+{
+    public override bool Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.String => "T".Equals(reader.GetString()?.Trim(),
+                                        StringComparison.OrdinalIgnoreCase),
+            JsonTokenType.True   => true,
+            JsonTokenType.False  => false,
+            _                    => false
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value ? "T" : "F");
 }

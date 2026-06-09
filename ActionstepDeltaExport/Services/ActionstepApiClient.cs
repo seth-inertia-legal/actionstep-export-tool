@@ -80,7 +80,8 @@ public sealed class ActionstepApiClient : IDisposable
                 yield return doc;
 
             // Determine whether there are more pages.
-            if (result.Meta?.Paging is { } paging)
+            // Paging is nested: meta.paging.actiondocuments.{recordCount, pageCount, ...}
+            if (result.Meta?.Paging?.ActionDocuments is { } paging)
             {
                 totalPages = paging.PageCount > 0 ? paging.PageCount : 1;
 
