@@ -162,7 +162,174 @@ public sealed class ActionstepApiClient : IDisposable
         }
     }
 
-    // ── Folder listing ───────────────────────────────────────────────────────
+    // ── Actions listing ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams all actions (matters) in the org.  No date filter — always a full dump.
+    /// </summary>
+    public async IAsyncEnumerable<ActionstepAction> GetAllActionsAsync(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        int page       = 1;
+        int totalPages = int.MaxValue;
+
+        while (page <= totalPages)
+        {
+            Console.WriteLine(page == 1
+                ? "  → Fetching actions page 1..."
+                : $"  → Fetching actions page {page}/{totalPages} ...");
+
+            string url = $"rest/actions?pageSize=200&page={page}";
+
+            var response = await _http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                string err = await response.Content.ReadAsStringAsync(ct);
+                throw new HttpRequestException(
+                    $"GET {url} → {(int)response.StatusCode} {response.ReasonPhrase}: {err}");
+            }
+
+            string body   = await response.Content.ReadAsStringAsync(ct);
+            var    result = JsonSerializer.Deserialize<ActionstepActionListResponse>(body, JsonOpts);
+
+            if (result is null || result.Actions.Count == 0)
+                yield break;
+
+            foreach (var action in result.Actions)
+                yield return action;
+
+            if (result.Meta?.Paging?.Actions is { } paging)
+            {
+                totalPages = paging.PageCount > 0 ? paging.PageCount : 1;
+                if (page == 1)
+                    Console.WriteLine($"  → {paging.TotalCount:N0} action(s) across {totalPages} page(s).");
+            }
+            else
+            {
+                yield break;
+            }
+
+            page++;
+        }
+    }
+
+    // ── Action type lookup ────────────────────────────────────────────────────
+
+    private readonly Dictionary<string, string?> _actionTypeCache =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the display name for an action type by ID.
+    /// Results are cached for the lifetime of this client instance.
+    /// </summary>
+    public async Task<string?> GetActionTypeNameAsync(
+        string? typeId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(typeId)) return null;
+
+        if (_actionTypeCache.TryGetValue(typeId, out string? cached))
+            return cached;
+
+        string url = $"rest/actiontypes/{Uri.EscapeDataString(typeId)}";
+
+        try
+        {
+            var response = await _http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _actionTypeCache[typeId] = null;
+                return null;
+            }
+
+            string body   = await response.Content.ReadAsStringAsync(ct);
+            var    result = JsonSerializer.Deserialize<ActionTypeResponse>(body, JsonOpts);
+            string? name  = result?.ActionType?.Name;
+            _actionTypeCache[typeId] = name;
+            return name;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.WriteLine($"  [WARN] Failed to fetch action type {typeId}: {ex.Message}");
+            _actionTypeCache[typeId] = null;
+            return null;
+        }
+    }
+
+    // ── Global folder listing ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Streams ALL actionfolders in the org without an action filter.
+    /// Used for the --include folders full dump.
+    /// </summary>
+    public async IAsyncEnumerable<ActionFolder> GetAllFoldersAsync(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        int page       = 1;
+        int totalPages = int.MaxValue;
+
+        while (page <= totalPages)
+        {
+            Console.WriteLine(page == 1
+                ? "  → Fetching folders page 1..."
+                : $"  → Fetching folders page {page}/{totalPages} ...");
+
+            string url = $"rest/actionfolders?pageSize=200&page={page}";
+
+            HttpResponseMessage response;
+            string body;
+
+            try
+            {
+                response = await _http.GetAsync(url, ct);
+                body     = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.WriteLine($"  [WARN] Failed to fetch folders page {page}: {ex.Message}");
+                yield break;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"  [WARN] GET {url} → {(int)response.StatusCode}: aborting folder dump.");
+                yield break;
+            }
+
+            ActionFolderListResponse? result;
+            try
+            {
+                result = JsonSerializer.Deserialize<ActionFolderListResponse>(body, JsonOpts);
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"  [WARN] Could not parse folder response page {page}: {ex.Message}");
+                yield break;
+            }
+
+            if (result is null || result.Folders.Count == 0)
+                yield break;
+
+            foreach (var folder in result.Folders)
+                yield return folder;
+
+            if (result.Meta?.Paging?.ActionFolders is { } paging)
+            {
+                totalPages = paging.PageCount > 0 ? paging.PageCount : 1;
+                if (page == 1)
+                    Console.WriteLine($"  → {paging.TotalCount:N0} folder(s) across {totalPages} page(s).");
+            }
+            else
+            {
+                yield break;
+            }
+
+            page++;
+        }
+    }
+
+    // ── Folder listing (per-action) ───────────────────────────────────────────
 
     /// <summary>
     /// Fetches all actionfolders belonging to <paramref name="actionId"/>.
@@ -246,7 +413,7 @@ public sealed class ActionstepApiClient : IDisposable
     /// Returns null if the participant cannot be resolved.
     /// </summary>
     public async Task<string?> GetParticipantNameAsync(
-        string participantId,
+        string? participantId,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(participantId))
