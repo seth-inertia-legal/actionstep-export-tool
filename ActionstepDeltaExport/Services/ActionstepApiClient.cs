@@ -29,7 +29,11 @@ public sealed class ActionstepApiClient : IDisposable
     {
         _base = token.ApiEndpoint.TrimEnd('/') + "/";
 
-        _http = new HttpClient { BaseAddress = new Uri(_base) };
+        _http = new HttpClient
+        {
+            BaseAddress = new Uri(_base),
+            Timeout     = TimeSpan.FromMinutes(10)   // Large queries can take > 100 s default.
+        };
         _http.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token.AccessToken);
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.api+json");
@@ -54,8 +58,9 @@ public sealed class ActionstepApiClient : IDisposable
 
         while (page <= totalPages)
         {
-            if (page > 1)
-                Console.WriteLine($"  → Fetching page {page}/{(totalPages == int.MaxValue ? "?" : totalPages.ToString())} ...");
+            Console.WriteLine(page == 1
+                ? "  → Fetching page 1 (may take a while — server is counting all matching records)..."
+                : $"  → Fetching page {page}/{totalPages} ...");
 
             string url =
                 $"rest/actiondocuments" +
