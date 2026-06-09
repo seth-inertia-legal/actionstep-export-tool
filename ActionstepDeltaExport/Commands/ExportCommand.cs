@@ -250,7 +250,7 @@ public static class ExportCommand
                                     ? Path.GetExtension(doc.FileName).TrimStart('.').ToUpperInvariant()
                                     : null,
             CreatedBy         = createdBy ?? existing?.CreatedBy,
-            ModifiedBy        = existing?.ModifiedBy,   // Not in API — preserve from manifest.
+            ModifiedBy        = doc.CheckedOutTo ?? createdBy ?? existing?.ModifiedBy,
             CreatedDate       = doc.CreatedTimestamp?.UtcDateTime,
             LastModified      = doc.ModifiedTimestamp?.UtcDateTime,
             DocumentTimestamp = doc.ModifiedTimestamp?.UtcDateTime,

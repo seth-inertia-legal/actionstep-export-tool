@@ -53,6 +53,13 @@ public class ActionDocument
     public DateTimeOffset? CreatedTimestamp { get; set; }
 
     /// <summary>
+    /// Display name of the user who currently has the document checked out,
+    /// or null if not checked out.  Used as modified_by; falls back to createdBy.
+    /// </summary>
+    [JsonPropertyName("checkedOutTo")]
+    public string? CheckedOutTo { get; set; }
+
+    /// <summary>
     /// True if the document has been soft-deleted in Actionstep.
     /// The API returns "T" or "F" as a string, not a JSON boolean.
     /// </summary>
