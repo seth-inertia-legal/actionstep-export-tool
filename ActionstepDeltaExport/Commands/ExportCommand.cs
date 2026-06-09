@@ -83,12 +83,17 @@ public static class ExportCommand
         int skipped    = 0;
         int deleted    = 0;
 
+        // Lazy per-action folder cache: populated on first document seen per action.
+        // Key = action_id string; Value = folderId → full path dictionary.
+        var folderCache = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
+
         await foreach (var doc in apiClient.GetDocumentsSinceAsync(sinceDate, ct))
         {
             // a) Handle soft-deleted documents: update manifest only, no file.
             if (doc.IsDeleted)
             {
-                UpsertRecord(manifestIndex, doc, outputPath: null);
+                string? deletedFolderPath = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+                UpsertRecord(manifestIndex, doc, outputPath: null, deletedFolderPath);
                 deleted++;
                 continue;
             }
@@ -108,13 +113,15 @@ public static class ExportCommand
             string safeFile   = SanitizeFileName(doc.FileName!);
             string outputPath = Path.Combine(outputRoot, actionId, safeFile);
 
+            string? folderPath = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+
             if (dryRun)
             {
                 // d-dry) Record intent without transferring.
                 Console.WriteLine($"  [DRY RUN] {actionId}/{safeFile} ({doc.FileSize ?? 0:N0} bytes)");
                 wouldDownload++;
                 totalBytes += doc.FileSize ?? 0;
-                UpsertRecord(manifestIndex, doc, outputPath);
+                UpsertRecord(manifestIndex, doc, outputPath, folderPath);
             }
             else
             {
@@ -128,7 +135,7 @@ public static class ExportCommand
 
                     Console.WriteLine("OK");
                     downloaded++;
-                    UpsertRecord(manifestIndex, doc, outputPath);
+                    UpsertRecord(manifestIndex, doc, outputPath, folderPath);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -194,7 +201,8 @@ public static class ExportCommand
     private static void UpsertRecord(
         Dictionary<string, ManifestRecord> index,
         ActionDocument doc,
-        string? outputPath)
+        string? outputPath,
+        string? folderPath = null)
     {
         var record = new ManifestRecord
         {
@@ -213,10 +221,37 @@ public static class ExportCommand
             CreatedDate       = doc.CreatedTimestamp?.UtcDateTime,
             LastModified      = doc.ModifiedTimestamp?.UtcDateTime,
             DocumentTimestamp = doc.ModifiedTimestamp?.UtcDateTime,
-            IsDeleted         = doc.IsDeleted
+            IsDeleted         = doc.IsDeleted,
+            FolderPath        = folderPath
         };
 
         index[doc.Id.ToString()] = record;
+    }
+
+    /// <summary>
+    /// Resolves the full folder path for a document using a per-action lazy cache.
+    /// Returns null if the document has no folder, or if folder data is unavailable.
+    /// </summary>
+    private static async Task<string?> ResolveFolderPathAsync(
+        ActionDocument doc,
+        Dictionary<string, Dictionary<int, string>> folderCache,
+        ActionstepApiClient apiClient,
+        CancellationToken ct)
+    {
+        string? folderIdStr = doc.Links?.Folder;
+        if (string.IsNullOrEmpty(folderIdStr) || !int.TryParse(folderIdStr, out int folderId))
+            return null;
+
+        string actionId = doc.Links?.Action ?? "unknown";
+
+        if (!folderCache.TryGetValue(actionId, out var pathDict))
+        {
+            var folders = await apiClient.GetFoldersForActionAsync(actionId, ct);
+            pathDict = FolderPathResolver.BuildPathDictionary(folders);
+            folderCache[actionId] = pathDict;
+        }
+
+        return pathDict.TryGetValue(folderId, out string? path) ? path : null;
     }
 
     /// <summary>Strips characters that are invalid in Windows/macOS file names.</summary>

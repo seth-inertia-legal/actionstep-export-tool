@@ -24,6 +24,15 @@ public class ManifestRecord
     public DateTime? LastModified       { get; set; }
     public DateTime? DocumentTimestamp  { get; set; }
     public bool      IsDeleted          { get; set; }
+
+    /// <summary>
+    /// Full Actionstep folder path reconstructed from the folder hierarchy,
+    /// e.g. "Correspondence/Incoming/2024".
+    /// Null for documents with no folder or when folder data is unavailable.
+    /// This column is appended by the delta export tool and is not present
+    /// in the original source manifest.
+    /// </summary>
+    public string?   FolderPath         { get; set; }
 }
 
 /// <summary>
@@ -47,6 +56,7 @@ public sealed class ManifestRecordMap : ClassMap<ManifestRecord>
         Map(m => m.LastModified).Name("last_modified");
         Map(m => m.DocumentTimestamp).Name("document_timestamp");
         Map(m => m.IsDeleted).Name("is_deleted").TypeConverter<TFBoolConverter>();
+        Map(m => m.FolderPath).Name("folder_path");
     }
 }
 
