@@ -25,6 +25,13 @@ public sealed class ActionstepApiClient : IDisposable
     // All resource paths are relative to this, e.g. "rest/actiondocuments"
     private readonly string _base;
 
+    /// <summary>
+    /// Total document count returned by the first page of the most recent
+    /// <see cref="GetDocumentsSinceAsync"/> call.  Zero until the first page
+    /// has been received.  Used by callers to compute ETA.
+    /// </summary>
+    public int TotalDocumentCount { get; private set; }
+
     public ActionstepApiClient(TokenData token)
     {
         _base = token.ApiEndpoint.TrimEnd('/') + "/";
@@ -94,9 +101,12 @@ public sealed class ActionstepApiClient : IDisposable
                 totalPages = paging.PageCount > 0 ? paging.PageCount : 1;
 
                 if (page == 1)
+                {
+                    TotalDocumentCount = paging.TotalCount;
                     Console.WriteLine(
                         $"  → {paging.TotalCount:N0} document(s) in delta across " +
                         $"{totalPages} page(s).");
+                }
             }
             else
             {

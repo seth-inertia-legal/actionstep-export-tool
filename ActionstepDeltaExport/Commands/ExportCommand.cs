@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using ActionstepDeltaExport.Models;
 using ActionstepDeltaExport.Services;
@@ -84,6 +85,8 @@ public static class ExportCommand
         int deleted    = 0;
         int processed  = 0;      // Total docs seen (for periodic progress log).
 
+        var sw = Stopwatch.StartNew();
+
         // Lazy per-action folder cache: populated on first document seen per action.
         // Key = action_id string; Value = folderId → full path dictionary.
         var folderCache = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
@@ -127,17 +130,26 @@ public static class ExportCommand
 
                 // Log progress every 100 documents so the console shows activity.
                 if (wouldDownload % 100 == 0)
+                {
+                    int    total   = apiClient.TotalDocumentCount;
+                    double rate    = sw.Elapsed.TotalSeconds > 0 ? processed / sw.Elapsed.TotalSeconds : 0;
+                    string etaStr  = (rate > 0 && total > processed)
+                        ? FormatDuration(TimeSpan.FromSeconds((total - processed) / rate))
+                        : "—";
                     Console.WriteLine(
-                        $"  [DRY RUN] {wouldDownload:N0} docs processed " +
-                        $"({folderCache.Count} action(s) resolved) ...");
+                        $"  [DRY RUN] {wouldDownload:N0}/{total:N0} docs" +
+                        $"  |  {folderCache.Count} action(s) resolved" +
+                        $"  |  elapsed {FormatDuration(sw.Elapsed)}" +
+                        $"  |  ETA {etaStr}");
+                }
             }
             else
             {
                 // d-live) Download with skip-and-continue error handling.
                 try
                 {
-                    Console.Write($"  Downloading doc {doc.Id} ({doc.FileSize ?? 0:N0} bytes) " +
-                                  $"→ {actionId}/{safeFile} ... ");
+                    Console.Write($"  [{FormatDuration(sw.Elapsed)}] Downloading doc {doc.Id} " +
+                                  $"({doc.FileSize ?? 0:N0} bytes) → {actionId}/{safeFile} ... ");
 
                     await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize ?? 0, outputPath, ct);
 
@@ -160,7 +172,7 @@ public static class ExportCommand
             }
         }
 
-        Console.WriteLine($"  Streaming complete: {processed:N0} total doc(s) seen.");
+        Console.WriteLine($"  Streaming complete: {processed:N0} total doc(s) seen in {FormatDuration(sw.Elapsed)}.");
 
         // ── 5. Write merged manifest ──────────────────────────────────────────
 
@@ -194,6 +206,7 @@ public static class ExportCommand
                                $"({totalBytes / 1024.0 / 1024.0:N1} MB total)");
             Console.WriteLine($"  Deleted        : {deleted:N0}  (manifest-only)");
             Console.WriteLine($"  Skipped        : {skipped:N0}  (placeholder/empty)");
+            Console.WriteLine($"  Elapsed        : {FormatDuration(sw.Elapsed)}");
         }
         else
         {
@@ -202,6 +215,7 @@ public static class ExportCommand
             Console.WriteLine($"  Deleted    : {deleted:N0}  (manifest-only update)");
             Console.WriteLine($"  Skipped    : {skipped:N0}  (placeholder/empty)");
             Console.WriteLine($"  Errors     : {errors.Count:N0}");
+            Console.WriteLine($"  Elapsed    : {FormatDuration(sw.Elapsed)}");
         }
 
         return errors.Count > 0 ? 2 : 0;   // Exit 2 = partial success (live run only).
@@ -264,6 +278,16 @@ public static class ExportCommand
         }
 
         return pathDict.TryGetValue(folderId, out string? path) ? path : null;
+    }
+
+    /// <summary>Formats a <see cref="TimeSpan"/> as "Xh YYm ZZs", "XXm ZZs", or "Zs".</summary>
+    private static string FormatDuration(TimeSpan t)
+    {
+        if (t.TotalHours >= 1)
+            return $"{(int)t.TotalHours}h {t.Minutes:D2}m {t.Seconds:D2}s";
+        if (t.TotalMinutes >= 1)
+            return $"{(int)t.TotalMinutes}m {t.Seconds:D2}s";
+        return $"{t.Seconds}s";
     }
 
     /// <summary>Strips characters that are invalid in Windows/macOS file names.</summary>
