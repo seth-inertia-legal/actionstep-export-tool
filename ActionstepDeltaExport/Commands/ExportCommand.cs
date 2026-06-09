@@ -1,71 +1,63 @@
 using System.Diagnostics;
 using System.Globalization;
+using CsvHelper;
+using CsvHelper.Configuration;
 using ActionstepDeltaExport.Models;
 using ActionstepDeltaExport.Services;
 
 namespace ActionstepDeltaExport.Commands;
 
 /// <summary>
-/// Core delta-export command.
+/// Core export command.
 ///
-/// Workflow:
-///   1. Authenticate (browser flow on first run, token cache thereafter).
-///   2. Load the existing manifest to build a lookup index.
-///   3. Stream actiondocuments modified since <c>SinceDate</c> from the API.
-///   4. For each document:
-///      - Live run : download the file into OutputRoot/{action_id}/
-///      - Dry run  : record what would be downloaded, skip file transfer
-///   5. Upsert the record into the merged manifest.
-///   6. Write a new dated manifest CSV next to the original.
-///   7. Append any per-document errors to errors_{timestamp}.csv.
+/// include = subset of { "documents", "actions", "folders" }
+/// download = true  → download document files  (documents only)
+///          = false → write audit/manifest CSV without downloading
+///
+/// Actions and folders always write a full-dump CSV regardless of --download.
+/// --since (SinceDate) is only applied when "documents" is in include.
 /// </summary>
 public static class ExportCommand
 {
-    private const long MinDownloadableSize = 1;   // Skip truly empty files.
+    private const long MinDownloadableSize = 1;
 
     public static async Task<int> RunAsync(
         AppSettings settings,
-        bool dryRun = false,
+        HashSet<string> include,
+        bool download = false,
         CancellationToken ct = default)
     {
         string runTimestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-
-        if (dryRun)
-        {
-            Console.WriteLine("*** DRY RUN — no files will be downloaded ***");
-            Console.WriteLine();
-        }
-
-        // ── 1. Resolve configuration ──────────────────────────────────────────
-
-        string manifestPath = settings.Export.ManifestPath;
         string outputRoot   = settings.Export.OutputRoot;
 
-        if (!DateTime.TryParse(settings.Export.SinceDate, CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out DateTime sinceDate))
+        // ── Parse sinceDate (documents only) ─────────────────────────────────
+
+        DateTime sinceDate = default;
+        if (include.Contains("documents"))
         {
-            Console.Error.WriteLine(
-                $"Invalid SinceDate in configuration: \"{settings.Export.SinceDate}\".");
-            return 1;
+            if (!DateTime.TryParse(settings.Export.SinceDate, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out sinceDate))
+            {
+                Console.Error.WriteLine(
+                    $"Invalid SinceDate in configuration: \"{settings.Export.SinceDate}\".");
+                return 1;
+            }
         }
 
-        Console.WriteLine($"Delta export starting.");
-        Console.WriteLine($"  Manifest : {manifestPath}");
+        // ── Print run header ─────────────────────────────────────────────────
+
+        Console.WriteLine("Export starting.");
+        Console.WriteLine($"  Include  : {string.Join(", ", include)}");
         Console.WriteLine($"  Output   : {outputRoot}");
-        Console.WriteLine($"  Since    : {sinceDate:yyyy-MM-dd HH:mm:ss} UTC");
+        if (include.Contains("documents"))
+        {
+            Console.WriteLine($"  Since    : {sinceDate:yyyy-MM-dd HH:mm:ss} UTC");
+            Console.WriteLine($"  Download : {(download ? "yes" : "no (audit only)")}");
+        }
         Console.WriteLine();
 
-        // ── 2. Load existing manifest ─────────────────────────────────────────
-
-        var existingRecords = ManifestService.Load(manifestPath);
-        Console.WriteLine($"  Loaded {existingRecords.Count:N0} existing manifest record(s).");
-
-        // Index by LogId (document ID as string key) for fast upsert.
-        var manifestIndex = existingRecords
-            .ToDictionary(r => r.LogId.ToString(), r => r);
-
-        // ── 3. Authenticate ───────────────────────────────────────────────────
+        // ── Authenticate (once, shared across all sub-exports) ────────────────
 
         Console.WriteLine("Authenticating...");
         using var auth = new AuthService(settings.Actionstep);
@@ -75,37 +67,74 @@ public static class ExportCommand
 
         using var apiClient = new ActionstepApiClient(token);
 
-        // ── 4. Stream and (optionally) download documents ─────────────────────
+        int exitCode = 0;
 
-        var errors    = new List<ExportError>();
-        int downloaded = 0;
-        int wouldDownload = 0;
-        long totalBytes   = 0;
-        int skipped    = 0;
-        int deleted    = 0;
-        int processed  = 0;      // Total docs seen (for periodic progress log).
+        if (include.Contains("documents"))
+        {
+            int result = await ExportDocumentsAsync(
+                settings, apiClient, sinceDate, download, outputRoot, runTimestamp, ct);
+            if (result != 0) exitCode = result;
+        }
 
-        var sw = Stopwatch.StartNew();
+        if (include.Contains("actions"))
+            await ExportActionsAsync(apiClient, outputRoot, runTimestamp, ct);
 
-        // Lazy per-action folder cache: populated on first document seen per action.
-        // Key = action_id string; Value = folderId → full path dictionary.
+        if (include.Contains("folders"))
+            await ExportFoldersAsync(apiClient, outputRoot, runTimestamp, ct);
+
+        return exitCode;
+    }
+
+    // ── Documents ─────────────────────────────────────────────────────────────
+
+    private static async Task<int> ExportDocumentsAsync(
+        AppSettings settings,
+        ActionstepApiClient apiClient,
+        DateTime sinceDate,
+        bool download,
+        string outputRoot,
+        string runTimestamp,
+        CancellationToken ct)
+    {
+        string manifestPath = settings.Export.ManifestPath;
+
+        if (!download)
+        {
+            Console.WriteLine("*** AUDIT MODE — no files will be downloaded ***");
+            Console.WriteLine();
+        }
+
+        // Load existing manifest
+        var existingRecords = ManifestService.Load(manifestPath);
+        Console.WriteLine($"  Loaded {existingRecords.Count:N0} existing manifest record(s).");
+        var manifestIndex = existingRecords.ToDictionary(r => r.LogId.ToString(), r => r);
+
+        var errors      = new List<ExportError>();
+        int downloaded  = 0;
+        int audited     = 0;
+        long totalBytes = 0;
+        int skipped     = 0;
+        int deleted     = 0;
+        int processed   = 0;
+
+        var sw          = Stopwatch.StartNew();
         var folderCache = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
 
         await foreach (var doc in apiClient.GetDocumentsSinceAsync(sinceDate, ct))
         {
             processed++;
 
-            // a) Handle soft-deleted documents: update manifest only, no file.
+            // Soft-deleted: update manifest only, no file transfer
             if (doc.IsDeleted)
             {
-                string? deletedFolderPath  = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
-                string? deletedCreatedBy   = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
-                UpsertRecord(manifestIndex, doc, outputPath: null, deletedFolderPath, deletedCreatedBy);
+                string? delPath      = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+                string? delCreatedBy = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
+                UpsertRecord(manifestIndex, doc, outputPath: null, delPath, delCreatedBy);
                 deleted++;
                 continue;
             }
 
-            // b) Skip placeholder documents (no file content).
+            // Skip placeholders (no file content)
             if (string.IsNullOrWhiteSpace(doc.FileIdentifier) ||
                 string.IsNullOrWhiteSpace(doc.FileName)       ||
                 (doc.FileSize ?? 0) < MinDownloadableSize)
@@ -114,32 +143,29 @@ public static class ExportCommand
                 continue;
             }
 
-            // c) Build output path: OutputRoot/{action_id}/{fileName}
-            // (FileName is guaranteed non-null by the guard above.)
             string actionId   = doc.Links?.Action ?? "unknown";
             string safeFile   = SanitizeFileName(doc.FileName!);
             string outputPath = Path.Combine(outputRoot, actionId, safeFile);
 
-            string? folderPath  = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
-            string? createdBy   = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
+            string? folderPath = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+            string? createdBy  = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
 
-            if (dryRun)
+            if (!download)
             {
-                // d-dry) Record intent without transferring.
-                wouldDownload++;
+                // Audit: record intent without transferring
+                audited++;
                 totalBytes += doc.FileSize ?? 0;
                 UpsertRecord(manifestIndex, doc, outputPath, folderPath, createdBy);
 
-                // Log progress every 100 documents so the console shows activity.
-                if (wouldDownload % 100 == 0)
+                if (audited % 100 == 0)
                 {
-                    int    total   = apiClient.TotalDocumentCount;
-                    double rate    = sw.Elapsed.TotalSeconds > 0 ? processed / sw.Elapsed.TotalSeconds : 0;
-                    string etaStr  = (rate > 0 && total > processed)
+                    int    total  = apiClient.TotalDocumentCount;
+                    double rate   = sw.Elapsed.TotalSeconds > 0 ? processed / sw.Elapsed.TotalSeconds : 0;
+                    string etaStr = (rate > 0 && total > processed)
                         ? FormatDuration(TimeSpan.FromSeconds((total - processed) / rate))
                         : "—";
                     Console.WriteLine(
-                        $"  [DRY RUN] {wouldDownload:N0}/{total:N0} docs" +
+                        $"  [AUDIT] {audited:N0}/{total:N0} docs" +
                         $"  |  {folderCache.Count} action(s) resolved" +
                         $"  |  elapsed {FormatDuration(sw.Elapsed)}" +
                         $"  |  ETA {etaStr}");
@@ -147,11 +173,12 @@ public static class ExportCommand
             }
             else
             {
-                // d-live) Download with skip-and-continue error handling.
+                // Download mode
                 try
                 {
-                    Console.Write($"  [{FormatDuration(sw.Elapsed)}] Downloading doc {doc.Id} " +
-                                  $"({doc.FileSize ?? 0:N0} bytes) → {actionId}/{safeFile} ... ");
+                    Console.Write(
+                        $"  [{FormatDuration(sw.Elapsed)}] Downloading doc {doc.Id} " +
+                        $"({doc.FileSize ?? 0:N0} bytes) → {actionId}/{safeFile} ... ");
 
                     await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize ?? 0, outputPath, ct);
 
@@ -174,67 +201,150 @@ public static class ExportCommand
             }
         }
 
-        Console.WriteLine($"  Streaming complete: {processed:N0} total doc(s) seen in {FormatDuration(sw.Elapsed)}.");
+        Console.WriteLine(
+            $"  Streaming complete: {processed:N0} total doc(s) seen in {FormatDuration(sw.Elapsed)}.");
 
-        // ── 5. Write merged manifest ──────────────────────────────────────────
+        // ── Write documents CSV ───────────────────────────────────────────────
 
-        string manifestBase = string.IsNullOrWhiteSpace(manifestPath)
-            ? "manifest"
-            : Path.GetFileNameWithoutExtension(manifestPath);
-        string suffix      = dryRun ? $"_dryrun_{runTimestamp}" : $"_{runTimestamp}";
-        string newManifest = Path.Combine(outputRoot, $"{manifestBase}{suffix}.csv");
-
-        var allRecords = manifestIndex.Values.OrderBy(r => r.ActionId).ThenBy(r => r.LogId);
-        ManifestService.Write(newManifest, allRecords);
+        string csvName    = download
+            ? $"documents_{runTimestamp}.csv"
+            : $"documents_audit_{runTimestamp}.csv";
+        string csvPath    = Path.Combine(outputRoot, csvName);
+        var    allRecords = manifestIndex.Values.OrderBy(r => r.ActionId).ThenBy(r => r.LogId);
+        ManifestService.Write(csvPath, allRecords);
         Console.WriteLine();
-        Console.WriteLine($"  Manifest written: {newManifest}");
+        Console.WriteLine($"  Documents CSV : {csvPath}");
 
-        // ── 6. Write errors CSV if any (live run only) ────────────────────────
+        // ── Write errors CSV (download mode only) ─────────────────────────────
 
-        if (!dryRun && errors.Count > 0)
+        if (download && errors.Count > 0)
         {
             string errorCsv = Path.Combine(outputRoot, $"errors_{runTimestamp}.csv");
             WriteErrorsCsv(errorCsv, errors);
-            Console.WriteLine($"  Errors CSV      : {errorCsv}  ({errors.Count} error(s))");
+            Console.WriteLine($"  Errors CSV    : {errorCsv}  ({errors.Count} error(s))");
         }
 
-        // ── 7. Summary ────────────────────────────────────────────────────────
+        // ── Summary ───────────────────────────────────────────────────────────
 
         Console.WriteLine();
-        if (dryRun)
+        if (!download)
         {
-            Console.WriteLine($"Dry run complete:");
-            Console.WriteLine($"  Would download : {wouldDownload:N0} file(s) " +
-                               $"({totalBytes / 1024.0 / 1024.0:N1} MB total)");
-            Console.WriteLine($"  Deleted        : {deleted:N0}  (manifest-only)");
-            Console.WriteLine($"  Skipped        : {skipped:N0}  (placeholder/empty)");
-            Console.WriteLine($"  Elapsed        : {FormatDuration(sw.Elapsed)}");
+            Console.WriteLine("Documents audit complete:");
+            Console.WriteLine(
+                $"  Audited  : {audited:N0} file(s) ({totalBytes / 1024.0 / 1024.0:N1} MB total)");
+            Console.WriteLine($"  Deleted  : {deleted:N0}  (manifest-only)");
+            Console.WriteLine($"  Skipped  : {skipped:N0}  (placeholder/empty)");
+            Console.WriteLine($"  Elapsed  : {FormatDuration(sw.Elapsed)}");
         }
         else
         {
-            Console.WriteLine($"Export complete:");
+            Console.WriteLine("Documents export complete:");
             Console.WriteLine($"  Downloaded : {downloaded:N0}");
             Console.WriteLine($"  Deleted    : {deleted:N0}  (manifest-only update)");
             Console.WriteLine($"  Skipped    : {skipped:N0}  (placeholder/empty)");
             Console.WriteLine($"  Errors     : {errors.Count:N0}");
             Console.WriteLine($"  Elapsed    : {FormatDuration(sw.Elapsed)}");
         }
+        Console.WriteLine();
 
-        return errors.Count > 0 ? 2 : 0;   // Exit 2 = partial success (live run only).
+        return errors.Count > 0 ? 2 : 0;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Actions ───────────────────────────────────────────────────────────────
 
-    /// <summary>Adds or replaces a record in <paramref name="index"/>.</summary>
+    private static async Task ExportActionsAsync(
+        ActionstepApiClient apiClient,
+        string outputRoot,
+        string runTimestamp,
+        CancellationToken ct)
+    {
+        Console.WriteLine("Exporting actions (full dump)...");
+        var sw      = Stopwatch.StartNew();
+        var records = new List<ActionRecord>();
+
+        await foreach (var action in apiClient.GetAllActionsAsync(ct))
+        {
+            string? typeId   = action.Links?.ActionType;
+            string? typeName = await apiClient.GetActionTypeNameAsync(typeId, ct);
+
+            records.Add(new ActionRecord
+            {
+                ActionId       = action.Id,
+                ActionName     = action.Name,
+                ActionTypeId   = typeId,
+                FileReference  = action.Reference,
+                ActionTypeName = typeName
+            });
+        }
+
+        string csvPath = Path.Combine(outputRoot, $"actions_{runTimestamp}.csv");
+        WriteCsv<ActionRecord, ActionRecordMap>(csvPath, records);
+
+        Console.WriteLine(
+            $"  Actions CSV : {csvPath}  ({records.Count:N0} record(s)) in {FormatDuration(sw.Elapsed)}");
+        Console.WriteLine();
+    }
+
+    // ── Folders ───────────────────────────────────────────────────────────────
+
+    private static async Task ExportFoldersAsync(
+        ActionstepApiClient apiClient,
+        string outputRoot,
+        string runTimestamp,
+        CancellationToken ct)
+    {
+        Console.WriteLine("Exporting folders (full dump)...");
+        var sw         = Stopwatch.StartNew();
+        var allFolders = new List<ActionFolder>();
+
+        await foreach (var folder in apiClient.GetAllFoldersAsync(ct))
+            allFolders.Add(folder);
+
+        // Build global path dictionary (id → full path string)
+        var pathDict = FolderPathResolver.BuildPathDictionary(allFolders);
+
+        var records = allFolders.Select(f => new FolderRecord
+        {
+            FolderId       = f.Id,
+            ActionId       = f.Links?.Action,
+            Name           = f.Name,
+            ParentFolderId = f.Links?.ParentFolder,
+            FolderPath     = pathDict.TryGetValue(f.Id, out string? p) ? p : null
+        }).ToList();
+
+        string csvPath = Path.Combine(outputRoot, $"folders_{runTimestamp}.csv");
+        WriteCsv<FolderRecord, FolderRecordMap>(csvPath, records);
+
+        Console.WriteLine(
+            $"  Folders CSV : {csvPath}  ({records.Count:N0} record(s)) in {FormatDuration(sw.Elapsed)}");
+        Console.WriteLine();
+    }
+
+    // ── CSV writer ────────────────────────────────────────────────────────────
+
+    private static void WriteCsv<TRecord, TMap>(string path, IEnumerable<TRecord> records)
+        where TMap : ClassMap<TRecord>
+    {
+        string? dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        using var writer = new StreamWriter(path, append: false, System.Text.Encoding.UTF8);
+        using var csv    = new CsvWriter(writer,
+            new CsvConfiguration(CultureInfo.InvariantCulture));
+        csv.Context.RegisterClassMap<TMap>();
+        csv.WriteRecords(records);
+    }
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
+
     private static void UpsertRecord(
         Dictionary<string, ManifestRecord> index,
         ActionDocument doc,
         string? outputPath,
-        string? folderPath  = null,
-        string? createdBy   = null)
+        string? folderPath = null,
+        string? createdBy  = null)
     {
-        // Preserve modifiedBy from the existing manifest entry — the actiondocuments
-        // API does not expose a modifiedBy participant link.
         index.TryGetValue(doc.Id.ToString(), out ManifestRecord? existing);
 
         var record = new ManifestRecord
@@ -261,10 +371,6 @@ public static class ExportCommand
         index[doc.Id.ToString()] = record;
     }
 
-    /// <summary>
-    /// Resolves the full folder path for a document using a per-action lazy cache.
-    /// Returns null if the document has no folder, or if folder data is unavailable.
-    /// </summary>
     private static async Task<string?> ResolveFolderPathAsync(
         ActionDocument doc,
         Dictionary<string, Dictionary<int, string>> folderCache,
@@ -287,7 +393,6 @@ public static class ExportCommand
         return pathDict.TryGetValue(folderId, out string? path) ? path : null;
     }
 
-    /// <summary>Formats a <see cref="TimeSpan"/> as "Xh YYm ZZs", "XXm ZZs", or "Zs".</summary>
     private static string FormatDuration(TimeSpan t)
     {
         if (t.TotalHours >= 1)
@@ -297,7 +402,6 @@ public static class ExportCommand
         return $"{t.Seconds}s";
     }
 
-    /// <summary>Strips characters that are invalid in Windows/macOS file names.</summary>
     private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
@@ -308,7 +412,7 @@ public static class ExportCommand
 
     private static void WriteErrorsCsv(string path, IEnumerable<ExportError> errors)
     {
-        using var writer = new System.IO.StreamWriter(path, append: false);
+        using var writer = new StreamWriter(path, append: false);
         writer.WriteLine("document_id,action_id,file_name,error_message,timestamp");
         foreach (var e in errors)
         {
@@ -323,10 +427,10 @@ public static class ExportCommand
 
     private sealed class ExportError
     {
-        public string  DocumentId   { get; set; } = "";
-        public string  ActionId     { get; set; } = "";
-        public string? FileName     { get; set; }
-        public string? ErrorMessage { get; set; }
-        public DateTime Timestamp   { get; set; }
+        public string   DocumentId   { get; set; } = "";
+        public string   ActionId     { get; set; } = "";
+        public string?  FileName     { get; set; }
+        public string?  ErrorMessage { get; set; }
+        public DateTime Timestamp    { get; set; }
     }
 }
