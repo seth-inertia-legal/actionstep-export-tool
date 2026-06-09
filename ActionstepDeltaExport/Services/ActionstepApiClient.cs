@@ -144,6 +144,68 @@ public sealed class ActionstepApiClient : IDisposable
         }
     }
 
+    // ── Folder listing ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches all actionfolders belonging to <paramref name="actionId"/>.
+    /// Returns an empty list (never throws) if the request fails, so a missing
+    /// folder tree never aborts an export run.
+    /// </summary>
+    public async Task<List<ActionFolder>> GetFoldersForActionAsync(
+        string actionId,
+        CancellationToken ct = default)
+    {
+        var folders    = new List<ActionFolder>();
+        int page       = 1;
+        int totalPages = int.MaxValue;
+
+        while (page <= totalPages)
+        {
+            string url =
+                $"rest/actionfolders" +
+                $"?action_eq={Uri.EscapeDataString(actionId)}" +
+                $"&pageSize=200" +
+                $"&page={page}";
+
+            HttpResponseMessage response;
+            string body;
+
+            try
+            {
+                response = await _http.GetAsync(url, ct);
+                body     = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.WriteLine($"  [WARN] Failed to fetch folders for action {actionId}: {ex.Message}");
+                return folders;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"  [WARN] GET {url} → {(int)response.StatusCode}: folder paths will be empty for action {actionId}.");
+                return folders;
+            }
+
+            var result = JsonSerializer.Deserialize<ActionFolderListResponse>(body, JsonOpts);
+
+            if (result is null || result.Folders.Count == 0)
+                break;
+
+            folders.AddRange(result.Folders);
+
+            if (result.Meta?.Paging?.ActionFolders is { } paging)
+                totalPages = paging.PageCount > 0 ? paging.PageCount : 1;
+            else
+                break;
+
+            page++;
+        }
+
+        return folders;
+    }
+
     // ── Probe ─────────────────────────────────────────────────────────────────
 
     /// <summary>
