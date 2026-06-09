@@ -11,7 +11,7 @@ public class ActionDocument
 {
     /// <summary>Actionstep document ID — maps to manifest log_id.</summary>
     [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
+    public int Id { get; set; }
 
     /// <summary>Human-readable document name — maps to manifest document_name.</summary>
     [JsonPropertyName("name")]

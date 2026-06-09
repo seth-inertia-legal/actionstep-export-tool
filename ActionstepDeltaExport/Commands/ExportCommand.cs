@@ -60,7 +60,7 @@ public static class ExportCommand
         var existingRecords = ManifestService.Load(manifestPath);
         Console.WriteLine($"  Loaded {existingRecords.Count:N0} existing manifest record(s).");
 
-        // Index by LogId (document ID) for fast upsert.
+        // Index by LogId (document ID as string key) for fast upsert.
         var manifestIndex = existingRecords
             .ToDictionary(r => r.LogId.ToString(), r => r);
 
@@ -135,7 +135,7 @@ public static class ExportCommand
                     Console.WriteLine($"FAILED: {ex.Message}");
                     errors.Add(new ExportError
                     {
-                        DocumentId   = doc.Id,
+                        DocumentId   = doc.Id.ToString(),
                         ActionId     = actionId,
                         FileName     = doc.FileName,
                         ErrorMessage = ex.Message,
@@ -199,7 +199,7 @@ public static class ExportCommand
     {
         var record = new ManifestRecord
         {
-            LogId             = int.TryParse(doc.Id, out int lid) ? lid : 0,
+            LogId             = doc.Id,
             ActionId          = int.TryParse(doc.Links?.Action, out int aid) ? aid : 0,
             DocumentName      = doc.Name,
             TemplateId        = null,
@@ -217,7 +217,7 @@ public static class ExportCommand
             IsDeleted         = doc.IsDeleted
         };
 
-        index[doc.Id] = record;
+        index[doc.Id.ToString()] = record;
     }
 
     /// <summary>Strips characters that are invalid in Windows/macOS file names.</summary>
