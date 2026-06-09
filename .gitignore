@@ -3,8 +3,9 @@ bin/
 obj/
 *.user
 
-# Runtime artifacts (never commit tokens or downloaded files)
+# Runtime artifacts (never commit tokens or credentials)
 tokens.json
+appsettings.Local.json
 *.csv
 *.pdf
 *.docx
