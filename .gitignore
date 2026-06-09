@@ -20,3 +20,4 @@ Thumbs.db
 .idea/
 *.suo
 *.sln.docstates
+/ActionstepDeltaExport/appsettings.json
