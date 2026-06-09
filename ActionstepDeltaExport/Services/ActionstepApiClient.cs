@@ -236,15 +236,21 @@ public sealed class ActionstepApiClient : IDisposable
         try
         {
             var response = await _http.GetAsync(url, ct);
+            string body  = await response.Content.ReadAsStringAsync(ct);
+
             if (!response.IsSuccessStatusCode)
             {
+                Console.WriteLine(
+                    $"  [DIAG] actiontypes/{typeId} → HTTP {(int)response.StatusCode}: " +
+                    $"{body[..Math.Min(200, body.Length)]}");
                 _actionTypeCache[typeId] = null;
                 return null;
             }
 
-            string body   = await response.Content.ReadAsStringAsync(ct);
-            var    result = JsonSerializer.Deserialize<ActionTypeResponse>(body, JsonOpts);
-            string? name  = result?.ActionType?.Name;
+            var     result = JsonSerializer.Deserialize<ActionTypeResponse>(body, JsonOpts);
+            string? name   = result?.ActionType?.Name;
+            Console.WriteLine($"  [DIAG] actiontypes/{typeId} → name={name ?? "(null)"} " +
+                              $"(ActionType obj={(result?.ActionType is null ? "null" : "present")})");
             _actionTypeCache[typeId] = name;
             return name;
         }
