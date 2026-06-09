@@ -233,6 +233,57 @@ public sealed class ActionstepApiClient : IDisposable
         return folders;
     }
 
+    // ── Participant lookup ────────────────────────────────────────────────────
+
+    // Global cache: participant IDs never change within a run.
+    // Null value means we already tried and got no result (avoids repeated 404s).
+    private readonly Dictionary<string, string?> _participantCache =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the display name for a participant by ID, e.g. "Lawson, Patrice".
+    /// Results are cached for the lifetime of this client instance.
+    /// Returns null if the participant cannot be resolved.
+    /// </summary>
+    public async Task<string?> GetParticipantNameAsync(
+        string participantId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(participantId))
+            return null;
+
+        if (_participantCache.TryGetValue(participantId, out string? cached))
+            return cached;
+
+        string url = $"rest/participants/{Uri.EscapeDataString(participantId)}";
+
+        try
+        {
+            var response = await _http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"  [WARN] GET {url} → {(int)response.StatusCode}: " +
+                    $"created_by will be empty for participant {participantId}.");
+                _participantCache[participantId] = null;
+                return null;
+            }
+
+            string body = await response.Content.ReadAsStringAsync(ct);
+            var result  = JsonSerializer.Deserialize<ParticipantResponse>(body, JsonOpts);
+            string? name = result?.Participant?.ResolvedName;
+            _participantCache[participantId] = name;
+            return name;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.WriteLine(
+                $"  [WARN] Failed to fetch participant {participantId}: {ex.Message}");
+            _participantCache[participantId] = null;
+            return null;
+        }
+    }
+
     // ── Probe ─────────────────────────────────────────────────────────────────
 
     /// <summary>

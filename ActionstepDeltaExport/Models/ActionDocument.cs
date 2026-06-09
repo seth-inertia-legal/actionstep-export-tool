@@ -73,6 +73,14 @@ public class ActionDocumentLinks
     /// <summary>Parent folder ID — maps to manifest folder_id.</summary>
     [JsonPropertyName("folder")]
     public string? Folder { get; set; }
+
+    /// <summary>
+    /// Participant ID of the user who created this document.
+    /// Resolved to a display name via GET /api/rest/participants/{id}.
+    /// NOTE: modifiedBy is not present in the actiondocuments API response.
+    /// </summary>
+    [JsonPropertyName("createdBy")]
+    public string? CreatedBy { get; set; }
 }
 
 // ── API response envelope ─────────────────────────────────────────────────────

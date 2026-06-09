@@ -98,8 +98,9 @@ public static class ExportCommand
             // a) Handle soft-deleted documents: update manifest only, no file.
             if (doc.IsDeleted)
             {
-                string? deletedFolderPath = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
-                UpsertRecord(manifestIndex, doc, outputPath: null, deletedFolderPath);
+                string? deletedFolderPath  = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+                string? deletedCreatedBy   = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
+                UpsertRecord(manifestIndex, doc, outputPath: null, deletedFolderPath, deletedCreatedBy);
                 deleted++;
                 continue;
             }
@@ -119,14 +120,15 @@ public static class ExportCommand
             string safeFile   = SanitizeFileName(doc.FileName!);
             string outputPath = Path.Combine(outputRoot, actionId, safeFile);
 
-            string? folderPath = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+            string? folderPath  = await ResolveFolderPathAsync(doc, folderCache, apiClient, ct);
+            string? createdBy   = await apiClient.GetParticipantNameAsync(doc.Links?.CreatedBy, ct);
 
             if (dryRun)
             {
                 // d-dry) Record intent without transferring.
                 wouldDownload++;
                 totalBytes += doc.FileSize ?? 0;
-                UpsertRecord(manifestIndex, doc, outputPath, folderPath);
+                UpsertRecord(manifestIndex, doc, outputPath, folderPath, createdBy);
 
                 // Log progress every 100 documents so the console shows activity.
                 if (wouldDownload % 100 == 0)
@@ -155,7 +157,7 @@ public static class ExportCommand
 
                     Console.WriteLine("OK");
                     downloaded++;
-                    UpsertRecord(manifestIndex, doc, outputPath, folderPath);
+                    UpsertRecord(manifestIndex, doc, outputPath, folderPath, createdBy);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -228,27 +230,32 @@ public static class ExportCommand
         Dictionary<string, ManifestRecord> index,
         ActionDocument doc,
         string? outputPath,
-        string? folderPath = null)
+        string? folderPath  = null,
+        string? createdBy   = null)
     {
+        // Preserve modifiedBy from the existing manifest entry — the actiondocuments
+        // API does not expose a modifiedBy participant link.
+        index.TryGetValue(doc.Id.ToString(), out ManifestRecord? existing);
+
         var record = new ManifestRecord
         {
             LogId             = doc.Id,
             ActionId          = int.TryParse(doc.Links?.Action, out int aid) ? aid : 0,
             DocumentName      = doc.Name,
-            TemplateId        = null,
+            TemplateId        = existing?.TemplateId,
             FileName          = doc.FileName,
             Directory         = outputPath is not null ? Path.GetDirectoryName(outputPath) : null,
             FolderId          = doc.Links?.Folder,
             FileType          = doc.FileName is not null
                                     ? Path.GetExtension(doc.FileName).TrimStart('.').ToUpperInvariant()
                                     : null,
-            CreatedBy         = null,
-            ModifiedBy        = null,
+            CreatedBy         = createdBy ?? existing?.CreatedBy,
+            ModifiedBy        = existing?.ModifiedBy,   // Not in API — preserve from manifest.
             CreatedDate       = doc.CreatedTimestamp?.UtcDateTime,
             LastModified      = doc.ModifiedTimestamp?.UtcDateTime,
             DocumentTimestamp = doc.ModifiedTimestamp?.UtcDateTime,
             IsDeleted         = doc.IsDeleted,
-            FolderPath        = folderPath
+            FolderPath        = folderPath ?? existing?.FolderPath
         };
 
         index[doc.Id.ToString()] = record;
