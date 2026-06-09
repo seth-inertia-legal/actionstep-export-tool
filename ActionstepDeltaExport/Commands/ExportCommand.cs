@@ -96,7 +96,7 @@ public static class ExportCommand
             // b) Skip placeholder documents (no file content).
             if (string.IsNullOrWhiteSpace(doc.FileIdentifier) ||
                 string.IsNullOrWhiteSpace(doc.FileName)       ||
-                doc.FileSize < MinDownloadableSize)
+                (doc.FileSize ?? 0) < MinDownloadableSize)
             {
                 skipped++;
                 continue;
@@ -111,9 +111,9 @@ public static class ExportCommand
             if (dryRun)
             {
                 // d-dry) Record intent without transferring.
-                Console.WriteLine($"  [DRY RUN] {actionId}/{safeFile} ({doc.FileSize:N0} bytes)");
+                Console.WriteLine($"  [DRY RUN] {actionId}/{safeFile} ({doc.FileSize ?? 0:N0} bytes)");
                 wouldDownload++;
-                totalBytes += doc.FileSize;
+                totalBytes += doc.FileSize ?? 0;
                 UpsertRecord(manifestIndex, doc, outputPath);
             }
             else
@@ -121,10 +121,10 @@ public static class ExportCommand
                 // d-live) Download with skip-and-continue error handling.
                 try
                 {
-                    Console.Write($"  Downloading doc {doc.Id} ({doc.FileSize:N0} bytes) " +
+                    Console.Write($"  Downloading doc {doc.Id} ({doc.FileSize ?? 0:N0} bytes) " +
                                   $"→ {actionId}/{safeFile} ... ");
 
-                    await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize, outputPath, ct);
+                    await apiClient.DownloadFileAsync(doc.FileIdentifier, doc.FileSize ?? 0, outputPath, ct);
 
                     Console.WriteLine("OK");
                     downloaded++;

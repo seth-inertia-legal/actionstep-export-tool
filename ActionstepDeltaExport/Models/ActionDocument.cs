@@ -38,7 +38,7 @@ public class ActionDocument
     /// Zero for placeholder documents.
     /// </summary>
     [JsonPropertyName("fileSize")]
-    public long FileSize { get; set; }
+    public long? FileSize { get; set; }
 
     /// <summary>File extension including dot, e.g. ".docx".</summary>
     [JsonPropertyName("extension")]
