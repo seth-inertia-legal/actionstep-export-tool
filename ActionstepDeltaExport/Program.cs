@@ -10,6 +10,7 @@ using ActionstepDeltaExport.Services;
 var configuration = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .AddJsonFile("appsettings.Local.json", optional: true,  reloadOnChange: false)
     .Build();
 
 var settings = configuration.Get<AppSettings>()

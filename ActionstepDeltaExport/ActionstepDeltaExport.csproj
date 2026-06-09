@@ -21,9 +21,12 @@
     <PackageReference Include="CsvHelper" Version="33.0.1" />
   </ItemGroup>
 
-  <!-- Copy appsettings.json to output directory -->
+  <!-- Copy settings files to output directory -->
   <ItemGroup>
     <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.Local.json" Condition="Exists('appsettings.Local.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
